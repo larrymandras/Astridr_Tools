@@ -17,6 +17,15 @@ class ToolResult:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class CredentialRequirement:
+    """Declares a credential a tool needs at execution time."""
+
+    key: str  # env var name or 1Password item (e.g., "GITHUB_TOKEN")
+    description: str = ""  # human-readable purpose
+    required: bool = True  # False = tool can degrade without it
+
+
 class BaseTool(ABC):
     """Abstract base class for tools.
 
@@ -30,6 +39,11 @@ class BaseTool(ABC):
 
     # Approval tier: "read_only" | "supervised" | "autonomous"
     approval_tier: str = "supervised"
+
+    # Credential manifest: tools declare what they need, vault proxy injects at call time.
+    # When non-empty, the proxy resolves credentials and puts them in _credentials dict.
+    required_credentials: list[CredentialRequirement] = []
+    _credentials: dict[str, str] = {}  # injected per-call, cleared after execution
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> ToolResult:
