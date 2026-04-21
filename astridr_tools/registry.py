@@ -8,7 +8,7 @@ from typing import Any
 import structlog
 
 from astridr.engine.config import ProfileConfig
-from astridr.tools.base import BaseTool
+from astridr.tools.base import BaseTool, ToolResult
 
 log = structlog.get_logger()
 
@@ -81,6 +81,10 @@ class ToolRegistry:
             return all_tools
         return [t for t in all_tools if self._profile_allows(t.name, profile)]
 
+    def list_tool_names(self) -> list[str]:
+        """Return all registered tool names."""
+        return list(self._tools.keys())
+
     def get_definitions(self, profile: ProfileConfig | None = None) -> list[dict[str, Any]]:
         """Get tool definitions for the LLM, optionally filtered by profile."""
         return [t.to_definition() for t in self.list_tools(profile)]
@@ -99,3 +103,43 @@ class ToolRegistry:
         # Check disabled list (glob patterns take precedence)
         disabled = any(fnmatch.fnmatch(tool_name, pat) for pat in profile.tools_disabled)
         return not disabled
+
+
+# ---------------------------------------------------------------------------
+# Input validation helper (PYDAI-01)
+# ---------------------------------------------------------------------------
+
+def validate_tool_input(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any] | ToolResult:
+    """Validate tool input kwargs against the registered Pydantic contract.
+
+    Returns the validated (and coerced) kwargs dict on success.
+    Returns a ToolResult(success=False) if validation fails.
+    Returns kwargs unchanged if no contract is registered for tool_name.
+
+    Designed to be called by the tool executor before tool.execute(**kwargs).
+    Raises no exceptions — validation failures are returned as ToolResult errors
+    so the agent loop can surface them cleanly.
+
+    Args:
+        tool_name: Name of the tool whose contract to validate against.
+        kwargs: Raw keyword arguments from the LLM tool call.
+
+    Returns:
+        Validated kwargs dict, or ToolResult with error on validation failure.
+    """
+    from astridr.agent.tool_contracts import get_contract  # local import avoids circular
+
+    contract = get_contract(tool_name)
+    if contract is None:
+        return kwargs
+
+    try:
+        validated = contract.model_validate(kwargs)
+        return validated.model_dump()
+    except Exception as exc:
+        log.warning(
+            "tool_registry.input_validation_failed",
+            tool=tool_name,
+            error=str(exc),
+        )
+        return ToolResult(success=False, error=f"Input validation failed for '{tool_name}': {exc}")
